@@ -23,6 +23,31 @@ from networks.transfer_net import TransformerNet
 from loss.vgg import Vgg16
 from train_model import utils
 
+import kornia as k
+import torch.nn.functional as F
+
+
+
+def calc_lapc_loss(input, target, kernel_size, mse_loss):
+        # input, target B,3,H,W
+        assert input.size() == target.size()
+        # convert to rgb
+        input = k.color.rgb_to_grayscale(input)
+        target = k.color.rgb_to_grayscale(target)
+        # avg_pool2d
+        input = F.avg_pool2d(input, kernel_size=3, padding=0)
+        target = F.avg_pool2d(target, kernel_size=3, padding=0)
+        # calculate laplacian
+        input_laplacian = k.filters.laplacian(
+            input, kernel_size=(3, 3), normalized=True, border_type="reflect"
+        )
+
+        target_laplacian = k.filters.laplacian(
+            target, kernel_size=(3, 3), normalized=True, border_type="reflect"
+        )
+        # return loss
+        return mse_loss(input_laplacian, target_laplacian)
+
 
 def check_paths(opt):
     try:
@@ -87,7 +112,7 @@ def train(opt):
     ])
 
 
-
+    laplacian_weight = float(opt['laplacian_weight'])
     content_weight = float(opt['content_weight'])
     style_weight = float(opt['style_weight'])
     ae_weight = float(opt['ae_weight'])
@@ -99,6 +124,7 @@ def train(opt):
         agg_content_loss = 0.
         agg_style_loss = 0.
         agg_ae_loss = 0.
+        agg_la_loss = 0.
 
         count = 0
         for batch_id, (x, _) in enumerate(train_loader):
@@ -141,8 +167,8 @@ def train(opt):
             x2 = x[1]
 
 
-            features_y = vgg(y1.to(device))
-            features_x = vgg(x1.to(device))
+            features_y = vgg(y1.to(device)) # feature of the output result
+            features_x = vgg(x1.to(device)) # feature of the input content
 
             content_loss = content_weight * mse_loss(features_y.relu2_2, features_x.relu2_2)
 
@@ -153,21 +179,28 @@ def train(opt):
             style_loss *= style_weight
 
             ae_loss = ae_weight * mse_loss(y2.to(device),x2.to(device))
+            
+            #begin of laplacian style loss
+            laplacian_loss = calc_lapc_loss(input=y1,target=x1.to(device),kernel_size=4,mse_loss=mse_loss)
+            laplacian_loss = laplacian_loss*laplacian_weight
 
-            total_loss = content_loss + style_loss + ae_loss
+            total_loss = content_loss + style_loss + ae_loss + laplacian_loss
             total_loss.backward()
             optimizer.step()
 
             agg_content_loss += content_loss.item()
             agg_style_loss += style_loss.item()
             agg_ae_loss += ae_loss.item()
+            agg_la_loss += laplacian_loss.item()
+            
 
             if (batch_id + 1) % opt['log_interval'] == 0:
-                mesg = "{}\tEpoch {}:\t[{}/{}]\tcontent: {:.6f}\tstyle: {:.6f}\tae: {:.6f}\ttotal: {:.6f}".format(
+                mesg = "{}\tEpoch {}:\t[{}/{}]\tcontent: {:.6f}\tstyle: {:.6f}\tae: {:.6f}\tlaplacian: {:.6f}\ttotal: {:.6f}".format(
                     time.ctime(), e, count, len(train_dataset),
                                   agg_content_loss / (batch_id + 1),
                                   agg_style_loss / (batch_id + 1),
                                     agg_ae_loss / (batch_id + 1),
+                                    agg_la_loss / (batch_id +1),
                                   (agg_content_loss + agg_style_loss) / (batch_id + 1)
                 )
                 print(mesg)

@@ -1,8 +1,8 @@
 
-epochs: 100
+epochs: 80
 batch_size: 8
 dataset: '../../train_dataset/content/'
-style_image: '../../train_dataset/style/'
+style_image: '../../train_dataset/VnStyle/'
 
 save_model_dir: '../../checkpoint/'
 image_size: 256
@@ -12,6 +12,7 @@ seed: 7
 content_weight: 1e5
 style_weight: 1e10
 ae_weight: 1e3
+laplacian_weight: 1e4
 
 lr: 0.001
 weight_decay: 0.5
