@@ -22,6 +22,7 @@ import cv2
 from networks.transfer_net import TransformerNet
 from loss.vgg import Vgg16
 from train_model import utils
+from torchvision.models.detection import maskrcnn_resnet50_fpn
 
 ## Depth Loss Implementation
 ## Depth Map Ultilization Function
