@@ -22,13 +22,12 @@ import cv2
 from networks.transfer_net import TransformerNet
 from loss.vgg import Vgg16
 from train_model import utils
-from torchvision.models.detection import maskrcnn_resnet50_fpn
+import torch.nn.functional as F  # ← missing
 
 ## Depth Loss Implementation
 ## Depth Map Ultilization Function
 ## Depth Model for Depth loss
-depth_model = maskrcnn_resnet50_fpn(pretrained=True)
-depth_model.eval()
+
 model_type = "MiDaS_small" 
 midas = torch.hub.load("intel-isl/MiDaS", model_type)
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
