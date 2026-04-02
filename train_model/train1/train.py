@@ -18,10 +18,105 @@ from torchvision import transforms
 from torchvision import datasets
 from torch.utils.data import DataLoader
 from torch.optim import Adam
-
+import cv2
 from networks.transfer_net import TransformerNet
 from loss.vgg import Vgg16
 from train_model import utils
+
+## Depth Loss Implementation
+## Depth Map Ultilization Function
+## Depth Model for Depth loss
+depth_model = maskrcnn_resnet50_fpn(pretrained=True)
+depth_model.eval()
+model_type = "MiDaS_small" 
+midas = torch.hub.load("intel-isl/MiDaS", model_type)
+device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+midas.to(device)
+midas.eval()
+midas_transforms = torch.hub.load("intel-isl/MiDaS", "transforms")
+
+if model_type == "DPT_Large" or model_type == "DPT_Hybrid":
+    transform = midas_transforms.dpt_transform
+else:
+    transform = midas_transforms.small_transform
+
+
+
+def calc_depth_map(image: torch.Tensor) -> torch.Tensor:
+    """
+    Estimate a depth map from an image tensor using MiDaS.
+
+    Args:
+        image: Tensor of shape (B, C, H, W), values in [0, 1] or [0, 255].
+
+    Returns:
+        Depth map tensor of shape (B, H, W).
+    """
+    with torch.no_grad():
+        if image.dim() == 4:
+            image = image[0]                        # (C, H, W)
+
+        img = image.cpu().numpy().transpose(1, 2, 0)  # (H, W, C)
+
+        if img.max() <= 1.0:
+            img = (img * 255).astype("uint8")
+
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+        input_batch = transform(img).to(device)
+        prediction = midas(input_batch)
+
+        prediction = F.interpolate(
+            prediction.unsqueeze(1),
+            size=img.shape[:2],
+            mode="bicubic",
+            align_corners=False,
+        ).squeeze()
+
+    return prediction.unsqueeze(0)          # (B, H, W)
+
+## Depth Loss Function
+def calc_depth_loss(
+    depth_map1: torch.Tensor,
+    depth_map2: torch.Tensor,
+    lambda_grad: float = 0.1,
+) -> torch.Tensor:
+    """
+    Depth loss = L1 pixel difference + weighted gradient consistency.
+
+    Args:
+        depth_map1: Depth tensor of shape (B, H, W).
+        depth_map2: Depth tensor of shape (B, H, W).
+        lambda_grad: Weight for the gradient consistency term.
+
+    Returns:
+        Scalar loss tensor.
+    """
+    assert depth_map1.shape == depth_map2.shape, "Depth maps must have the same shape."
+
+    d1 = depth_map1.unsqueeze(1)   # (B, 1, H, W)
+    d2 = depth_map2.unsqueeze(1)
+
+    # Absolute depth difference
+    loss_l1 = F.l1_loss(d1, d2)
+
+    # Spatial gradient consistency
+    def depth_gradient(x):
+        dx = x[:, :, :, :-1] - x[:, :, :, 1:]   # horizontal
+        dy = x[:, :, :-1, :] - x[:, :, 1:, :]   # vertical
+        return dx, dy
+
+    d1_dx, d1_dy = depth_gradient(d1)
+    d2_dx, d2_dy = depth_gradient(d2)
+    loss_grad = F.l1_loss(d1_dx, d2_dx) + F.l1_loss(d1_dy, d2_dy)
+
+    return loss_l1 + lambda_grad * loss_grad
+
+
+
+
+
+
 
 
 def check_paths(opt):
@@ -91,6 +186,7 @@ def train(opt):
     content_weight = float(opt['content_weight'])
     style_weight = float(opt['style_weight'])
     ae_weight = float(opt['ae_weight'])
+    depth_weight   = float(opt.get('depth_weight', 1e4)) 
 
     total_epochs = opt['epochs']
     for e in range(begin_epoch + 1,total_epochs+1):
@@ -99,6 +195,7 @@ def train(opt):
         agg_content_loss = 0.
         agg_style_loss = 0.
         agg_ae_loss = 0.
+        agg_depth_loss   = 0.  # Cumulative Loss
 
         count = 0
         for batch_id, (x, _) in enumerate(train_loader):
@@ -153,21 +250,41 @@ def train(opt):
             style_loss *= style_weight
 
             ae_loss = ae_weight * mse_loss(y2.to(device),x2.to(device))
+            
+             # ── Depth Loss (output vs content) ────────────────────────────────
+            depth_output  = calc_depth_map(y1)   # stylized
+            depth_content = calc_depth_map(x1)   # content (not style — see note)
+ 
+            # resize depth maps to match if needed
+            if depth_output.shape != depth_content.shape:
+                depth_content = F.interpolate(
+                    depth_content.unsqueeze(1),
+                    size=depth_output.shape[-2:],
+                    mode="bicubic",
+                    align_corners=False,
+                ).squeeze(1)
+ 
+            depth_loss = depth_weight * calc_depth_loss(depth_output, depth_content)
+            # ─────────────────────────────────────────────────────────────────
+            
+            # Hey, Geometric Loss is Missing ?
 
-            total_loss = content_loss + style_loss + ae_loss
+            total_loss = content_loss + style_loss + ae_loss + depth_loss
             total_loss.backward()
             optimizer.step()
 
             agg_content_loss += content_loss.item()
             agg_style_loss += style_loss.item()
             agg_ae_loss += ae_loss.item()
+            agg_depth_loss   += depth_loss.item() 
 
             if (batch_id + 1) % opt['log_interval'] == 0:
-                mesg = "{}\tEpoch {}:\t[{}/{}]\tcontent: {:.6f}\tstyle: {:.6f}\tae: {:.6f}\ttotal: {:.6f}".format(
+                mesg = "{}\tEpoch {}:\t[{}/{}]\tcontent: {:.6f}\tstyle: {:.6f}\tae: \tdepth: {:.6f} {:.6f}\ttotal: {:.6f}".format(
                     time.ctime(), e, count, len(train_dataset),
                                   agg_content_loss / (batch_id + 1),
                                   agg_style_loss / (batch_id + 1),
                                     agg_ae_loss / (batch_id + 1),
+                                    agg_depth_loss / (batch_id+1),
                                   (agg_content_loss + agg_style_loss) / (batch_id + 1)
                 )
                 print(mesg)
