@@ -16,9 +16,9 @@ class TransformerNet(torch.nn.Module):
         self.in1 = InstanceNorm2d(32)
         self.cm1 = condition_modulate(32)
 
-        self.conv2 = ConvLayer(32, 64, kernel_size=3, stride=2)
+        self.conv2 = ConvLayer(32, 64, kernel_size=3, stride=2) # take 32 in , 64 out
         self.in2 = InstanceNorm2d(64)
-        self.cm2 = condition_modulate(64)
+        self.cm2 = condition_modulate(64) # so 64 here 
 
         self.conv3 = ConvLayer(64, 128, kernel_size=3, stride=2)
         self.in3 = InstanceNorm2d(128)
@@ -35,12 +35,17 @@ class TransformerNet(torch.nn.Module):
         self.in4 = InstanceNorm2d(64)
         self.cm4 = condition_modulate(64)
 
-        self.deconv2 = UpsampleConvLayer(64, 32, kernel_size=3, stride=1, upsample=2)
-        self.in5 = InstanceNorm2d(32)
-        self.cm5 = condition_modulate(32)
 
-        self.deconv3 = ConvLayer(32, 3, kernel_size=9, stride=1)
+        self.dasc1 = detail_aware_skip_connection(64)
+        self.deconv2 = UpsampleConvLayer(64, 32, kernel_size=3, stride=1, upsample=2) # 64 in , 32 out, so cat before here works!
+        self.in5 = InstanceNorm2d(32)
+        self.cm5 = condition_modulate(32) 
+
+        self.dasc2 = detail_aware_skip_connection(32)
+        self.deconv3 = ConvLayer(32, 3, kernel_size=9, stride=1) # 32 in 3 out,
         self.relu = torch.nn.ReLU()
+        
+    
 
 
     def forward(self, X, style_id):
@@ -51,12 +56,16 @@ class TransformerNet(torch.nn.Module):
         y = self.in1(y)
         y = self.cm1(y,representation) # conditional modulated
         y = self.relu(y)
+        skip_conv1 = y # higher style statistics transfer
+        
 
 
         y = self.conv2(y)
         y = self.in2(y)
         y = self.cm2(y, representation)  # conditional modulated
         y = self.relu(y)
+        skip_conv2 = y # higher style statistics transfer
+        
 
         y = self.conv3(y)
         y = self.in3(y)
@@ -73,17 +82,64 @@ class TransformerNet(torch.nn.Module):
         y = self.in4(y)
         y = self.cm4(y, representation)  # conditional modulated
         y = self.relu(y)
-
+    
+        # y = torch.cat([y,skip_conv2], dim = 1) # added skip connection, but channel double
+       # y = self.downsample2(y) # downsample back to 64, stride 1, padding 1
+        
+       #  y = alpha * y + beta * skip_conv2
+        y = self.dasc1(y,skip_conv2,representation)
         y = self.deconv2(y)
         y = self.in5(y)
         y = self.cm5(y, representation)  # conditional modulated
         y = self.relu(y)
-
+        
+       # y = torch.cat([skip_conv1,y],dim=1) # added skip connection, but not sure of how Dynamic Conv be broken or not
+       # y = self.downsample3(y)
+        # y = alpha * y + beta * skip_conv2
+        y = self.dasc2(y,skip_conv1,representation)
         y = self.deconv3(y)
 
 
 
         return y,representation
+
+
+class detail_aware_skip_connection(torch.nn.Module):
+    """
+    Detail Aware Skip Connection
+    adapt from: https://www.sciencedirect.com/science/article/pii/S0925231225017631
+    made by my limited understanding and adding style condition for merging
+    could be improve / need guidance
+    """
+    
+    def __init__(self, in_channels):
+        super().__init__()
+        self.weight_gamma = torch.nn.Sequential(
+            torch.nn.Linear(32, in_channels,bias=False),
+            #torch.nn.LeakyReLU(0.1, True) #
+        )
+        self.weight_beta = torch.nn.Sequential(
+            torch.nn.Linear(32, in_channels, bias=False),
+            #torch.nn.LeakyReLU(0.1, True)
+        )
+    
+    def forward(self,decoder,encoder, representation):
+        assert decoder.shape == encoder.shape # same level, or else break
+        b,c,h,w = decoder.shape
+        
+        # unbounded prediction
+        weight_gamma = self.weight_gamma(representation).view(b,c,1,1) 
+        weight_beta = self.weight_beta(representation).view(b,c,1,1)
+        
+        # Softmax so the weight add up to 1
+        weights = torch.stack([weight_gamma,weight_beta], dim=0)
+        weights = torch.softmax(weights,dim=0)
+        
+        
+        out = weights[0]*encoder+weights[1]*decoder
+        
+        return out
+
 
 
 class condition_modulate(torch.nn.Module):

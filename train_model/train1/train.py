@@ -28,17 +28,21 @@ import torch.nn.functional as F  # ← missing
 ## Depth Map Ultilization Function
 ## Depth Model for Depth loss
 
-model_type = "MiDaS_small" 
+model_type = "DPT_Large" 
 midas = torch.hub.load("intel-isl/MiDaS", model_type)
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-midas.to(device)
-midas.eval()
+midas = torch.hub.load("intel-isl/MiDaS", model_type)
 midas_transforms = torch.hub.load("intel-isl/MiDaS", "transforms")
 
 if model_type == "DPT_Large" or model_type == "DPT_Hybrid":
-    transform = midas_transforms.dpt_transform
+    midas_transform = midas_transforms.dpt_transform
 else:
-    transform = midas_transforms.small_transform
+    midas_transform = midas_transforms.small_transform
+for param in midas.parameters():
+    param.requires_grad = False
+midas = midas.to(device)         
+midas.eval()
+
 
 
 
@@ -251,21 +255,24 @@ def train(opt):
 
             ae_loss = ae_weight * mse_loss(y2.to(device),x2.to(device))
             
-             # ── Depth Loss (output vs content) ────────────────────────────────
-            depth_output  = calc_depth_map(y1)   # stylized
-            depth_content = calc_depth_map(x1)   # content (not style — see note)
+            #  # ── Depth Loss (output vs content) ────────────────────────────────
+            # depth_output  = calc_depth_map(y1)   # stylized
+            # depth_content = calc_depth_map(x1)   # content (not style — see note)
  
-            # resize depth maps to match if needed
-            if depth_output.shape != depth_content.shape:
-                depth_content = F.interpolate(
-                    depth_content.unsqueeze(1),
-                    size=depth_output.shape[-2:],
-                    mode="bicubic",
-                    align_corners=False,
-                ).squeeze(1)
+            # # resize depth maps to match if needed
+            # if depth_output.shape != depth_content.shape:
+            #     depth_content = F.interpolate(
+            #         depth_content.unsqueeze(1),
+            #         size=depth_output.shape[-2:],
+            #         mode="bicubic",
+            #         align_corners=False,
+            #     ).squeeze(1)
  
-            depth_loss = depth_weight * calc_depth_loss(depth_output, depth_content)
-            # ─────────────────────────────────────────────────────────────────
+            # depth_loss = depth_weight * calc_depth_loss(depth_output, depth_content)
+            # # ─────────────────────────────────────────────────────────────────
+            y1_midas = midas(y1)
+            x1_midas = midas(x1)
+            depth_loss = mse_loss(y1_midas,x1_midas)
             
             # Hey, Geometric Loss is Missing ?
 
