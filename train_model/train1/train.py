@@ -270,8 +270,8 @@ def train(opt):
  
             # depth_loss = depth_weight * calc_depth_loss(depth_output, depth_content)
             # # ─────────────────────────────────────────────────────────────────
-            y1_midas = midas(y1)
-            x1_midas = midas(x1)
+            y1_midas = midas(y1.to(device))
+            x1_midas = midas(x1.to(device))
             depth_loss = mse_loss(y1_midas,x1_midas)
             
             # Hey, Geometric Loss is Missing ?
