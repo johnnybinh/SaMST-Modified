@@ -142,8 +142,6 @@ def train(opt):
     torch.manual_seed(opt['seed'])
 
     transform = transforms.Compose([
-        transforms.Resize(opt['image_size']),  # the shorter side is resize to match image_size
-        transforms.CenterCrop(opt['image_size']),
         transforms.ToTensor(),  # to tensor [0,1]
         transforms.Lambda(lambda x: x.mul(255))  # convert back to [0, 255]
     ])
@@ -273,7 +271,7 @@ def train(opt):
             y1_midas = midas(y1.to(device))
             x1_midas = midas(x1.to(device))
             depth_loss = mse_loss(y1_midas,x1_midas)
-            
+            depth_loss = depth_weight*depth_loss
             # Hey, Geometric Loss is Missing ?
 
             total_loss = content_loss + style_loss + ae_loss + depth_loss

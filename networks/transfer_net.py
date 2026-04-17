@@ -124,7 +124,13 @@ class detail_aware_skip_connection(torch.nn.Module):
         )
     
     def forward(self,decoder,encoder, representation):
-        assert decoder.shape == encoder.shape # same level, or else break
+        if encoder.shape != decoder.shape:
+            encoder = torch.nn.functional.interpolate(
+                encoder,
+                size=decoder.shape[-2:],
+                mode='bilinear',
+                align_corners=False
+            )
         b,c,h,w = decoder.shape
         
         # unbounded prediction
@@ -137,6 +143,11 @@ class detail_aware_skip_connection(torch.nn.Module):
         
         # controlled mixing
         out = weights[0]*encoder+weights[1]*decoder
+        
+        # debug
+        print("Encoder Weight: ", weights[0].mean().item())
+        print("Decoder Weight: ", weights[1].mean().item())
+
         
         return out
 

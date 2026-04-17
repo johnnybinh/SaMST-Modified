@@ -32,8 +32,6 @@ def stylize(opt):
             file_path = os.path.join(opt['content_image_dir'],filename)
             content_image = utils.load_image(filename=file_path, scale=opt['content_scale'])
             content_transform = transforms.Compose([
-                transforms.Resize(opt['image_size']),
-                transforms.CenterCrop(opt['image_size']),
                 transforms.ToTensor(),
                 transforms.Lambda(lambda x: x.mul(255))
             ])
