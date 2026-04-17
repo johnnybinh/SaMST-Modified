@@ -106,7 +106,7 @@ class TransformerNet(torch.nn.Module):
 
 class detail_aware_skip_connection(torch.nn.Module):
     """
-    Detail Aware Skip Connection
+    Detail Aware Skip Connection - Controlled Mixing
     adapt from: https://www.sciencedirect.com/science/article/pii/S0925231225017631
     made by my limited understanding and adding style condition for merging
     could be improve / need guidance
@@ -135,7 +135,7 @@ class detail_aware_skip_connection(torch.nn.Module):
         weights = torch.stack([weight_gamma,weight_beta], dim=0)
         weights = torch.softmax(weights,dim=0)
         
-        
+        # controlled mixing
         out = weights[0]*encoder+weights[1]*decoder
         
         return out
